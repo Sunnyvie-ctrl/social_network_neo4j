@@ -76,28 +76,39 @@ class Database:
     
     # Post operations
     def create_post(self, user_id: int, content: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO posts (user_id, content) VALUES (?, ?)', (user_id, content))
-            return cursor.lastrowid
+        with self.driver.session() as session:
+            # Generate new post ID
+            result = session.run("""
+                MATCH (p:Post)
+                RETURN coalesce(max(p.id), 0) AS max_id
+            """)
+            max_id = result.single()["max_id"]
+            new_post_id = max_id + 1
+
+            session.run("""
+                MATCH (u:User {id: $user_id})
+                CREATE (p:Post {id: $post_id, content: $content, timestamp: datetime()})
+                CREATE (u)-[:POSTED]->(p)
+            """, user_id=user_id, post_id=new_post_id, content=content)
+        return new_post_id
+
     
     def get_posts_by_user(self, user_id: int) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                SELECT p.id, p.content, p.timestamp, u.username, u.name 
-                FROM posts p JOIN users u ON p.user_id = u.id 
-                WHERE p.user_id = ?
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (u:User {id: $user_id})-[:POSTED]->(p:Post)
+                RETURN p, u
                 ORDER BY p.timestamp DESC
-            ''', (user_id,))
+            """, user_id=user_id)
             return [{
-                'id': row[0],
-                'content': row[1],
-                'timestamp': row[2],
-                'username': row[3],
-                'name': row[4]
-            } for row in cursor.fetchall()]
-    
+                "id": record["p"]["id"],
+                "content": record["p"]["content"],
+                "timestamp": record["p"]["timestamp"],
+                "username": record["u"]["username"],
+                "name": record["u"]["name"]
+            } for record in result]
+        
+    # Feed
     def get_feed(self, user_id: int) -> List[dict]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
