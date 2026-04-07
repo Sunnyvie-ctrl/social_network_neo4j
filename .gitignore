@@ -1,3 +1,6 @@
 social_metwork.db
 .env/
 .env
+venv/
+.venv/
+env/
