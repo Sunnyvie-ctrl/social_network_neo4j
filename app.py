@@ -33,28 +33,46 @@ class Database:
             REQUIRE u.username IS UNIQUE
             """)
     
-    def _get_connection(self):
-        return sqlite3.connect(self.db_name)
+    # def _get_connection(self):
+    #     return sqlite3.connect(self.db_name)
     
     # User operations
     def create_user(self, username: str, name: str) -> int:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO users (username, name) VALUES (?, ?)', (username, name))
-            return cursor.lastrowid
+        with self.driver.session() as session:
+            # Find the current max ID, could use uuid but I don't want to change ID from int to str
+            result = session.run("""
+                MATCH (u:User)
+                RETURN coalesce(max(u.id), 0) AS max_id
+            """)
+            max_id = result.single()["max_id"]
+            new_id = max_id + 1
+
+            # Create the user node
+            session.run("""
+                CREATE (u:User {id: $id, username: $username, name: $name})
+            """, id=new_id, username=username, name=name)
+
+        return new_id
     
     def get_user(self, user_id: int) -> Optional[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users WHERE id = ?', (user_id,))
-            row = cursor.fetchone()
-            return {'id': row[0], 'username': row[1], 'name': row[2]} if row else None
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (u:User {id: $id})
+                RETURN u
+            """, id=user_id)
+            record = result.single()
+            if record:
+                return dict(record["u"])
+            return None
     
     def get_all_users(self) -> List[dict]:
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT id, username, name FROM users')
-            return [{'id': row[0], 'username': row[1], 'name': row[2]} for row in cursor.fetchall()]
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (u:User)
+                RETURN u
+                ORDER BY u.id
+            """)
+            return [dict(record["u"]) for record in result]
     
     # Post operations
     def create_post(self, user_id: int, content: str) -> int:
